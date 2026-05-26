@@ -451,6 +451,15 @@ function normalizePairingName(value) {
     .trim();
 }
 
+function buildDatasetLookupKey(value) {
+  return normalizeValue(value)
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function rowBandClass(access) {
   if (access === 'open') return 'bg-fuchsia-100/60';
   if (access === 'proprietary') return 'bg-sky-100/80';
@@ -1529,29 +1538,31 @@ function TouchpointSalesWorkspace({ datasets }) {
                         rowSpan={section.rows.length}
                         className="sticky left-0 z-10 w-72 border-r border-slate-200 bg-white px-5 py-5 align-top"
                       >
-                        <div className="text-xl font-black tracking-tight text-brand-navy">{section.factorName}</div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <span
-                            className={`inline-flex rounded-full border px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] ${
-                              section.factorGroup === 'Analytical'
-                                ? 'border-green-200 bg-green-50 text-green-700'
-                                : section.factorGroup === 'Reference'
-                                  ? 'border-sky-200 bg-sky-50 text-brand-blue'
-                                  : 'border-slate-200 bg-slate-50 text-slate-500'
-                            }`}
-                          >
-                            {section.factorGroup}
-                          </span>
-                          {section.productFamilies.map((family) => (
+                        <div className="sticky top-28">
+                          <div className="text-xl font-black tracking-tight text-brand-navy">{section.factorName}</div>
+                          <div className="mt-3 flex flex-wrap gap-2">
                             <span
-                              key={`${section.factorName}-${family}`}
-                              className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] text-slate-600"
+                              className={`inline-flex rounded-full border px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] ${
+                                section.factorGroup === 'Analytical'
+                                  ? 'border-green-200 bg-green-50 text-green-700'
+                                  : section.factorGroup === 'Reference'
+                                    ? 'border-sky-200 bg-sky-50 text-brand-blue'
+                                    : 'border-slate-200 bg-slate-50 text-slate-500'
+                              }`}
                             >
-                              {family}
+                              {section.factorGroup}
                             </span>
-                          ))}
+                            {section.productFamilies.map((family) => (
+                              <span
+                                key={`${section.factorName}-${family}`}
+                                className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] text-slate-600"
+                              >
+                                {family}
+                              </span>
+                            ))}
+                          </div>
+                          <p className="mt-3 text-sm leading-7 text-slate-500">{section.summary}</p>
                         </div>
-                        <p className="mt-3 text-sm leading-7 text-slate-500">{section.summary}</p>
                       </td>
                     ) : null}
                     <td className={`sticky left-72 z-10 w-72 border-r border-slate-200 px-5 py-5 align-top ${rowBandClass(row.dataset.openProprietary)}`}>
@@ -1791,18 +1802,20 @@ async function fetchSalesTouchpointRows(industry, fallbackDatasets = []) {
 
   const metadataByName = new Map();
   metadataRows.forEach((dataset) => {
-    const key = normalizeStageName(dataset.commonName).toLowerCase();
-    if (!key) return;
-    if (!metadataByName.has(key)) metadataByName.set(key, []);
-    metadataByName.get(key).push(dataset);
+    const keys = [buildDatasetLookupKey(dataset.commonName), buildDatasetLookupKey(dataset.rawName)].filter(Boolean);
+    keys.forEach((key) => {
+      if (!metadataByName.has(key)) metadataByName.set(key, []);
+      metadataByName.get(key).push(dataset);
+    });
   });
 
   const fallbackByName = new Map();
   fallbackDatasets.forEach((dataset) => {
-    const key = normalizeStageName(dataset.commonName).toLowerCase();
-    if (!key) return;
-    if (!fallbackByName.has(key)) fallbackByName.set(key, []);
-    fallbackByName.get(key).push(dataset);
+    const keys = [buildDatasetLookupKey(dataset.commonName), buildDatasetLookupKey(dataset.rawName)].filter(Boolean);
+    keys.forEach((key) => {
+      if (!fallbackByName.has(key)) fallbackByName.set(key, []);
+      fallbackByName.get(key).push(dataset);
+    });
   });
 
   const stages = INDUSTRY_STAGES[industry] || [];
@@ -1811,7 +1824,7 @@ async function fetchSalesTouchpointRows(industry, fallbackDatasets = []) {
     .filter((row) => normalizeValue(row['Common Name']))
     .map((row, index) => {
       const commonName = normalizeValue(row['Common Name']);
-      const lookupKey = normalizeStageName(commonName).toLowerCase();
+      const lookupKey = buildDatasetLookupKey(commonName);
       const meta = metadataByName.get(lookupKey)?.[0] || fallbackByName.get(lookupKey)?.[0] || null;
       const gapSource = normalizeValue(row.Source);
       const stageUsage = stages.reduce((accumulator, stageName) => {
