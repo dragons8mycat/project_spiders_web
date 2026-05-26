@@ -451,6 +451,13 @@ function normalizePairingName(value) {
     .trim();
 }
 
+function rowBandClass(access) {
+  if (access === 'open') return 'bg-fuchsia-100/60';
+  if (access === 'proprietary') return 'bg-sky-100/80';
+  if (access === 'mixed') return 'bg-violet-100/70';
+  return 'bg-white';
+}
+
 function getStageEntries(datasets, industry, stage) {
   return datasets
     .filter((dataset) => getUsageForIndustryStage(dataset, industry, stage))
@@ -1547,7 +1554,7 @@ function TouchpointSalesWorkspace({ datasets }) {
                         <p className="mt-3 text-sm leading-7 text-slate-500">{section.summary}</p>
                       </td>
                     ) : null}
-                    <td className="sticky left-72 z-10 w-72 border-r border-slate-200 bg-white px-5 py-5 align-top">
+                    <td className={`sticky left-72 z-10 w-72 border-r border-slate-200 px-5 py-5 align-top ${rowBandClass(row.dataset.openProprietary)}`}>
                       <div className="text-lg font-black tracking-tight text-brand-navy">{row.dataset.commonName}</div>
                       <div className="mt-2 flex flex-wrap gap-2">
                         <AccessBadge access={row.dataset.openProprietary} />
@@ -1572,7 +1579,9 @@ function TouchpointSalesWorkspace({ datasets }) {
                       return (
                         <td
                           key={stageName}
-                          className={`px-3 py-4 align-top ${activeStage === stageName ? 'bg-sky-50/70' : 'bg-white'}`}
+                          className={`px-3 py-4 align-top ${rowBandClass(row.dataset.openProprietary)} ${
+                            activeStage === stageName ? 'shadow-[inset_0_0_0_9999px_rgba(224,242,254,0.32)]' : ''
+                          }`}
                         >
                           {!jurisdictionMatch ? (
                             <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
