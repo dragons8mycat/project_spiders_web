@@ -78,6 +78,14 @@ const INDUSTRY_STAGES = {
   ],
 };
 
+const GAP_SHEETS = {
+  Housing: 'Gap_Housing',
+  Solar: 'Gap_Solar',
+  'Onshore Wind': 'Gap_Onshore_Wind',
+  'Offshore Wind': 'Gap_Offshore_Wind',
+  Fibre: 'Gap_Fibre',
+};
+
 const BUSINESS_UNITS = ['Emapsite', 'LandHawk', 'ThinkWhere', 'Backlog'];
 const ROLE_ORDER = ['A', 'B', 'D'];
 
@@ -224,6 +232,18 @@ function sheetTableToObjects(table) {
     headers.reduce((record, header, index) => {
       const cell = row.c?.[index];
       record[header] = cell?.v ?? '';
+      return record;
+    }, {}),
+  );
+}
+
+function gapTableToObjects(table) {
+  const rows = (table.rows || []).map((row) => (row.c || []).map((cell) => normalizeValue(cell?.v)));
+  if (rows.length === 0) return [];
+  const headers = rows[0].map((header) => normalizeStageName(header));
+  return rows.slice(1).map((values) =>
+    headers.reduce((record, header, index) => {
+      record[header] = values[index] ?? '';
       return record;
     }, {}),
   );
@@ -484,8 +504,15 @@ function StatusBadge({ status }) {
 }
 
 function AccessBadge({ access }) {
+  const styleMap = {
+    open: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700',
+    proprietary: 'border-sky-200 bg-sky-50 text-brand-blue',
+    mixed: 'border-violet-200 bg-violet-50 text-violet-700',
+    unknown: 'border-slate-200 bg-slate-50 text-slate-600',
+  };
+
   return (
-    <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.18em] text-slate-600">
+    <span className={`inline-flex rounded-full border px-3 py-1 text-[11px] font-black uppercase tracking-[0.18em] ${styleMap[access] || styleMap.unknown}`}>
       {access === 'unknown' ? 'Unknown' : access}
     </span>
   );
@@ -1195,9 +1222,11 @@ function TouchpointSalesWorkspace({ datasets }) {
   const [industry, setIndustry] = useState('Solar');
   const [search, setSearch] = useState('');
   const [availability, setAvailability] = useState('all');
-  const [selectedJurisdictions, setSelectedJurisdictions] = useState(['England']);
+  const [selectedJurisdictions, setSelectedJurisdictions] = useState(['GB', 'England', 'Scotland', 'Wales']);
   const [activeStage, setActiveStage] = useState('');
   const [selectedTouchpoint, setSelectedTouchpoint] = useState(null);
+  const [touchpointRows, setTouchpointRows] = useState([]);
+  const [touchpointLoading, setTouchpointLoading] = useState(true);
 
   const stages = INDUSTRY_STAGES[industry] || [];
 
@@ -1205,15 +1234,58 @@ function TouchpointSalesWorkspace({ datasets }) {
     setActiveStage((current) => current || stages[0] || '');
   }, [stages]);
 
-  const filteredDatasets = useMemo(
-    () => getDatasetsForIndustry(visibleDatasets, industry, { search, availability }),
-    [availability, industry, search, visibleDatasets],
-  );
+  useEffect(() => {
+    let active = true;
+    setTouchpointLoading(true);
+    setSelectedTouchpoint(null);
+    fetchSalesTouchpointRows(industry, visibleDatasets)
+      .then((rows) => {
+        if (!active) return;
+        setTouchpointRows(rows);
+        setTouchpointLoading(false);
+      })
+      .catch((error) => {
+        console.error(error);
+        if (!active) return;
+        setTouchpointRows([]);
+        setTouchpointLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [industry, visibleDatasets]);
+
+  const filteredRows = useMemo(() => {
+    return touchpointRows.filter(({ dataset, holdingsStatus, gapSource }) => {
+      const haystack = [
+        dataset.commonName,
+        dataset.factor,
+        dataset.factorGroup,
+        dataset.productFamily,
+        dataset.supplier,
+        dataset.description,
+        dataset.coverage,
+      ]
+        .join(' ')
+        .toLowerCase();
+
+      const matchesSearch = !search || haystack.includes(search.toLowerCase());
+      const matchesAvailability =
+        availability === 'all' ||
+        (availability === 'catalogue' && dataset.status === 'catalogue') ||
+        (availability === 'required' && ['desired-gap', 'sme-input', 'client-request'].includes(dataset.status)) ||
+        (availability === 'missing-catalogue' && (dataset.status !== 'catalogue' || gapSource.toLowerCase() === 'gap')) ||
+        (availability === 'not-productised' && dataset.status !== 'product');
+
+      return matchesSearch && matchesAvailability && Boolean(dataset.commonName) && Boolean(holdingsStatus || gapSource);
+    });
+  }, [availability, search, touchpointRows]);
 
   const factorSections = useMemo(() => {
     const grouped = new Map();
 
-    filteredDatasets.forEach((dataset) => {
+    filteredRows.forEach(({ dataset }) => {
       const factorName = dataset.factor || dataset.group || 'Unmapped factor';
       if (!grouped.has(factorName)) {
         grouped.set(factorName, {
@@ -1262,9 +1334,9 @@ function TouchpointSalesWorkspace({ datasets }) {
                 : null;
               return accumulator;
             }, {}),
-          })),
+        })),
       }));
-  }, [filteredDatasets, industry, stages]);
+  }, [filteredRows, industry, stages]);
 
   function toggleJurisdiction(nextValue) {
     setSelectedTouchpoint(null);
@@ -1283,7 +1355,7 @@ function TouchpointSalesWorkspace({ datasets }) {
   function resetFilters() {
     setSearch('');
     setAvailability('all');
-    setSelectedJurisdictions(['England']);
+    setSelectedJurisdictions(['GB', 'England', 'Scotland', 'Wales']);
     setSelectedTouchpoint(null);
     setActiveStage(stages[0] || '');
   }
@@ -1382,7 +1454,7 @@ function TouchpointSalesWorkspace({ datasets }) {
               </p>
             </div>
             <div className="rounded-full bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-600">
-              {factorSections.length} factors in current view
+              {touchpointLoading ? 'Loading workbook logic...' : `${factorSections.length} factors in current view`}
             </div>
           </div>
           <div className="mt-5 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
@@ -1407,6 +1479,11 @@ function TouchpointSalesWorkspace({ datasets }) {
         </div>
 
         <div className="max-h-[72vh] overflow-auto">
+          {touchpointLoading ? (
+            <div className="flex items-center justify-center p-10 text-sm font-semibold text-slate-500">
+              Loading workbook touchpoint logic...
+            </div>
+          ) : null}
           <table className="min-w-[2120px] w-full table-fixed border-collapse text-sm">
             <thead className="sticky top-0 z-20">
               <tr className="border-b border-slate-300 bg-slate-100 shadow-[inset_0_-1px_0_rgba(203,213,225,0.9)]">
@@ -1485,7 +1562,12 @@ function TouchpointSalesWorkspace({ datasets }) {
                       const touchpoint = row.cells[stageName];
                       const jurisdictionMatch =
                         !selectedJurisdictions.length ||
-                        row.jurisdictions.some((jurisdiction) => selectedJurisdictions.includes(jurisdiction));
+                        row.jurisdictions.some(
+                          (jurisdiction) =>
+                            selectedJurisdictions.includes(jurisdiction) ||
+                            jurisdiction === 'GB' ||
+                            selectedJurisdictions.includes('GB'),
+                        );
 
                       return (
                         <td
@@ -1508,7 +1590,11 @@ function TouchpointSalesWorkspace({ datasets }) {
                                 selectedTouchpoint?.dataset.id === touchpoint.dataset.id &&
                                 selectedTouchpoint?.stageName === touchpoint.stageName
                                   ? 'border-brand-blue bg-sky-50'
-                                  : 'border-slate-200 bg-white hover:border-brand-sky hover:bg-slate-50'
+                                  : touchpoint.dataset.openProprietary === 'open'
+                                    ? 'border-fuchsia-200 bg-fuchsia-50/50 hover:border-fuchsia-300'
+                                    : touchpoint.dataset.openProprietary === 'proprietary'
+                                      ? 'border-sky-200 bg-sky-50/50 hover:border-brand-sky'
+                                      : 'border-slate-200 bg-white hover:border-brand-sky hover:bg-slate-50'
                               }`}
                             >
                               <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
@@ -1673,6 +1759,87 @@ async function fetchDatasetsFromSheets() {
       index,
     ),
   );
+}
+
+async function fetchSalesTouchpointRows(industry, fallbackDatasets = []) {
+  const gapSheet = GAP_SHEETS[industry];
+  if (!gapSheet) return [];
+
+  const [masterResponse, gapResponse] = await Promise.all([
+    fetch(`https://docs.google.com/spreadsheets/d/${GOOGLE_SHEET_ID}/gviz/tq?tqx=out:json&sheet=1_Data_Master_Expanded`),
+    fetch(`https://docs.google.com/spreadsheets/d/${GOOGLE_SHEET_ID}/gviz/tq?tqx=out:json&sheet=${gapSheet}`),
+  ]);
+
+  if (!masterResponse.ok || !gapResponse.ok) {
+    throw new Error(`Workbook touchpoint fetch failed: ${masterResponse.status}/${gapResponse.status}`);
+  }
+
+  const masterJson = parseGoogleSheetJson(await masterResponse.text());
+  const gapJson = parseGoogleSheetJson(await gapResponse.text());
+  const masterRows = sheetTableToObjects(masterJson.table);
+  const gapRows = gapTableToObjects(gapJson.table);
+  const metadataRows = masterRows.map((row, index) => normaliseDataset({ ...row, sourceDataId: normalizeValue(row.data_id) }, index));
+
+  const metadataByName = new Map();
+  metadataRows.forEach((dataset) => {
+    const key = normalizeStageName(dataset.commonName).toLowerCase();
+    if (!key) return;
+    if (!metadataByName.has(key)) metadataByName.set(key, []);
+    metadataByName.get(key).push(dataset);
+  });
+
+  const fallbackByName = new Map();
+  fallbackDatasets.forEach((dataset) => {
+    const key = normalizeStageName(dataset.commonName).toLowerCase();
+    if (!key) return;
+    if (!fallbackByName.has(key)) fallbackByName.set(key, []);
+    fallbackByName.get(key).push(dataset);
+  });
+
+  const stages = INDUSTRY_STAGES[industry] || [];
+
+  return gapRows
+    .filter((row) => normalizeValue(row['Common Name']))
+    .map((row, index) => {
+      const commonName = normalizeValue(row['Common Name']);
+      const lookupKey = normalizeStageName(commonName).toLowerCase();
+      const meta = metadataByName.get(lookupKey)?.[0] || fallbackByName.get(lookupKey)?.[0] || null;
+      const gapSource = normalizeValue(row.Source);
+      const stageUsage = stages.reduce((accumulator, stageName) => {
+        const marker = normalizeUsageValue(row[normalizeStageName(stageName)]);
+        if (marker) accumulator[normalizeStageName(stageName)] = marker;
+        return accumulator;
+      }, {});
+
+      const dataset = normaliseDataset(
+        {
+          id: meta?.id || `gap-${industry}-${index}`,
+          sourceDataId: meta?.sourceDataId || '',
+          commonName,
+          product_family: normalizeValue(row['Product Family']) || meta?.productFamily || '',
+          Factor: meta?.factor || '',
+          'Factor Group': meta?.factorGroup || '',
+          Group: meta?.group || normalizeValue(row['Product Family']) || 'Unmapped factor',
+          Supplier: meta?.supplier || '',
+          Coverage: meta?.coverage || '',
+          Description: meta?.description || 'Workbook-defined lifecycle touchpoint row.',
+          status: meta?.status || normalizeStatus(row['Holdings Status']),
+          openProprietary: meta?.openProprietary || normalizeAccess(gapSource),
+          Source: gapSource,
+          usage: stageUsage,
+          industryUsage: {
+            [industry]: stageUsage,
+          },
+        },
+        index,
+      );
+
+      return {
+        dataset,
+        gapSource,
+        holdingsStatus: normalizeValue(row['Holdings Status']),
+      };
+    });
 }
 
 function CatalogueWorkspace({ datasets, onSync }) {
