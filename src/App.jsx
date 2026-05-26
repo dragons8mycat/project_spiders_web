@@ -125,6 +125,14 @@ function normalizeBusinessUnit(rawValue, supplier = '', status = '') {
   return 'Backlog';
 }
 
+function normalizeFactorGroup(rawValue) {
+  const raw = normalizeValue(rawValue).toLowerCase();
+  if (!raw) return 'Unclassified';
+  if (raw.includes('reference')) return 'Reference';
+  if (raw.includes('analytical')) return 'Analytical';
+  return normalizeValue(rawValue);
+}
+
 function normalizeUsageValue(rawValue) {
   const raw = normalizeValue(rawValue).toLowerCase();
   if (raw === 'a' || raw.includes('analytical')) return 'A';
@@ -283,6 +291,10 @@ function normaliseDataset(input, index = 0) {
     rawName: normalizeValue(input.name || input.Name || input.Dataset || input.Dataset_Name),
     commonName: normalizeValue(input.commonName || input['Common Name'] || input.common_name) || 'Untitled dataset',
     group: normalizeValue(input.group || input.Group || input['Data Group']) || 'General',
+    factor: normalizeValue(input.factor || input.Factor) || '',
+    factorGroup: normalizeFactorGroup(input.factorGroup || input['Factor Group']),
+    productFamily:
+      normalizeValue(input.productFamily || input.product_family || input['product_family'] || input['Product Family']) || '',
     businessUnit,
     supplier: supplier || 'Not set',
     description:
@@ -344,6 +356,7 @@ function inferJurisdictions(dataset) {
     dataset.commonName,
     dataset.rawName,
     dataset.group,
+    dataset.factor,
     dataset.supplier,
     dataset.coverage,
     dataset.description,
@@ -370,6 +383,9 @@ function getDatasetsForIndustry(datasets, industry, filters = {}) {
       dataset.commonName,
       dataset.rawName,
       dataset.group,
+      dataset.factor,
+      dataset.factorGroup,
+      dataset.productFamily,
       dataset.supplier,
       dataset.description,
       dataset.coverage,
@@ -1185,21 +1201,29 @@ function TouchpointSalesWorkspace({ datasets }) {
     const grouped = new Map();
 
     filteredDatasets.forEach((dataset) => {
-      const factorName = dataset.group || 'General';
+      const factorName = dataset.factor || dataset.group || 'Unmapped factor';
       if (!grouped.has(factorName)) {
         grouped.set(factorName, {
           factorName,
-          summary: `Internally mapped factor using current catalogue data in ${industry}.`,
+          factorGroup: dataset.factorGroup || 'Unclassified',
+          productFamilies: new Set(),
           datasets: [],
         });
       }
-      grouped.get(factorName).datasets.push(dataset);
+      const row = grouped.get(factorName);
+      row.datasets.push(dataset);
+      if (dataset.productFamily) row.productFamilies.add(dataset.productFamily);
+      if (row.factorGroup === 'Unclassified' && dataset.factorGroup && dataset.factorGroup !== 'Unclassified') {
+        row.factorGroup = dataset.factorGroup;
+      }
     });
 
     return Array.from(grouped.values())
       .sort((left, right) => left.factorName.localeCompare(right.factorName))
       .map((row) => ({
         ...row,
+        summary: `Workbook-driven factor used in ${industry} lifecycle touchpoints.`,
+        productFamilies: Array.from(row.productFamilies).sort(),
         cells: stages.reduce((accumulator, stageName) => {
           const stageTouchpoints = row.datasets
             .filter((dataset) => Boolean(getUsageForIndustryStage(dataset, industry, stageName)))
@@ -1253,14 +1277,14 @@ function TouchpointSalesWorkspace({ datasets }) {
     <div className="space-y-6">
       <ShellCard className="p-7">
         <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
-          <div className="max-w-4xl">
-            <div className="text-[11px] font-black uppercase tracking-[0.24em] text-brand-blue">Sales Preview</div>
-            <h2 className="mt-3 text-4xl font-black tracking-tight text-brand-navy">Catalogue-led touchpoint matrix</h2>
-            <p className="mt-3 text-sm leading-7 text-slate-500">
-              This preview keeps the current MVP catalogue-led. Factors are an internal mapping layer over the data catalogue,
-              the lifecycle stays fixed while you scroll, and product linkage is intentionally out of scope for this page.
-            </p>
-          </div>
+            <div className="max-w-4xl">
+              <div className="text-[11px] font-black uppercase tracking-[0.24em] text-brand-blue">Sales Preview</div>
+              <h2 className="mt-3 text-4xl font-black tracking-tight text-brand-navy">Catalogue-led touchpoint matrix</h2>
+              <p className="mt-3 text-sm leading-7 text-slate-500">
+              This preview keeps the current MVP catalogue-led. Factors now come from the workbook metadata layer, the lifecycle
+              stays fixed while you scroll, and product linkage is intentionally out of scope for this page.
+              </p>
+            </div>
           <div className="rounded-[24px] border border-slate-200 bg-slate-50 px-5 py-4 text-right">
             <div className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">Drawer state</div>
             <div className="mt-2 text-lg font-black text-brand-heading">{selectedTouchpoint ? 'Open' : 'Closed'}</div>
@@ -1374,7 +1398,7 @@ function TouchpointSalesWorkspace({ datasets }) {
                 <th className="sticky left-0 z-30 w-72 border-r border-slate-300 bg-slate-200/95 px-5 py-4 text-left align-top">
                   <div className="text-[11px] font-black uppercase tracking-[0.18em] text-brand-blue">Factors</div>
                   <div className="mt-2 text-sm font-semibold text-slate-600">
-                    Internal mapping layer over catalogue data entries
+                    Workbook-driven factor, factor group, and product family tags
                   </div>
                 </th>
                 {stages.map((stageName, index) => (
@@ -1396,6 +1420,27 @@ function TouchpointSalesWorkspace({ datasets }) {
                 <tr key={row.factorName}>
                   <td className="sticky left-0 z-10 w-72 border-r border-slate-200 bg-white px-5 py-5 align-top">
                     <div className="text-xl font-black tracking-tight text-brand-navy">{row.factorName}</div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <span
+                        className={`inline-flex rounded-full border px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] ${
+                          row.factorGroup === 'Analytical'
+                            ? 'border-green-200 bg-green-50 text-green-700'
+                            : row.factorGroup === 'Reference'
+                              ? 'border-sky-200 bg-sky-50 text-brand-blue'
+                              : 'border-slate-200 bg-slate-50 text-slate-500'
+                        }`}
+                      >
+                        {row.factorGroup}
+                      </span>
+                      {row.productFamilies.map((family) => (
+                        <span
+                          key={`${row.factorName}-${family}`}
+                          className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] text-slate-600"
+                        >
+                          {family}
+                        </span>
+                      ))}
+                    </div>
                     <p className="mt-3 text-sm leading-7 text-slate-500">{row.summary}</p>
                   </td>
                   {stages.map((stageName) => {
@@ -1499,11 +1544,18 @@ function TouchpointSalesWorkspace({ datasets }) {
                   </div>
                   <div>
                     <dt className="font-semibold text-slate-500">Data group / factor source</dt>
-                    <dd className="mt-1">{selectedTouchpoint.dataset.group}</dd>
+                    <dd className="mt-1">
+                      {selectedTouchpoint.dataset.factor || selectedTouchpoint.dataset.group}
+                      {selectedTouchpoint.dataset.factorGroup ? ` | ${selectedTouchpoint.dataset.factorGroup}` : ''}
+                    </dd>
                   </div>
                   <div>
                     <dt className="font-semibold text-slate-500">Supplier</dt>
                     <dd className="mt-1">{selectedTouchpoint.dataset.supplier}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-semibold text-slate-500">Product family</dt>
+                    <dd className="mt-1">{selectedTouchpoint.dataset.productFamily || 'Not set'}</dd>
                   </div>
                   <div>
                     <dt className="font-semibold text-slate-500">Coverage / jurisdictions</dt>
@@ -2232,15 +2284,18 @@ export default function App() {
         name: dataset.rawName,
         commonName: dataset.commonName,
         group: dataset.group,
-                businessUnit: dataset.businessUnit,
-                supplier: dataset.supplier,
-                description: dataset.description,
-                coverage: dataset.coverage,
-                source: dataset.source,
-                isClientOnly: dataset.isClientOnly,
-                status: dataset.status,
-                openProprietary: dataset.openProprietary,
-                usage: stageUsageByDataId[normalizeValue(row.data_id)]?.usage || {},
+        factor: dataset.factor,
+        factorGroup: dataset.factorGroup,
+        productFamily: dataset.productFamily,
+        businessUnit: dataset.businessUnit,
+        supplier: dataset.supplier,
+        description: dataset.description,
+        coverage: dataset.coverage,
+        source: dataset.source,
+        isClientOnly: dataset.isClientOnly,
+        status: dataset.status,
+        openProprietary: dataset.openProprietary,
+        usage: stageUsageByDataId[normalizeValue(row.data_id)]?.usage || {},
         industryUsage: stageUsageByDataId[normalizeValue(row.data_id)]?.industryUsage || {},
         updatedAt: serverTimestamp(),
       });
