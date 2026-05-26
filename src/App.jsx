@@ -418,6 +418,19 @@ function getIndustryStagesUsed(dataset, industry) {
   return (INDUSTRY_STAGES[industry] || []).filter((stageName) => Boolean(getUsageForIndustryStage(dataset, industry, stageName)));
 }
 
+function accessPriorityValue(access) {
+  const order = { open: 1, mixed: 2, proprietary: 3, unknown: 4 };
+  return order[access] || 5;
+}
+
+function normalizePairingName(value) {
+  return normalizeValue(value)
+    .toLowerCase()
+    .replace(/\b(open|open source|premium|proprietary|licensed|paid|gb|england|scotland|wales)\b/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 function getStageEntries(datasets, industry, stage) {
   return datasets
     .filter((dataset) => getUsageForIndustryStage(dataset, industry, stage))
@@ -1197,7 +1210,7 @@ function TouchpointSalesWorkspace({ datasets }) {
     [availability, industry, search, visibleDatasets],
   );
 
-  const factorRows = useMemo(() => {
+  const factorSections = useMemo(() => {
     const grouped = new Map();
 
     filteredDatasets.forEach((dataset) => {
@@ -1210,46 +1223,48 @@ function TouchpointSalesWorkspace({ datasets }) {
           datasets: [],
         });
       }
-      const row = grouped.get(factorName);
-      row.datasets.push(dataset);
-      if (dataset.productFamily) row.productFamilies.add(dataset.productFamily);
-      if (row.factorGroup === 'Unclassified' && dataset.factorGroup && dataset.factorGroup !== 'Unclassified') {
-        row.factorGroup = dataset.factorGroup;
+      const section = grouped.get(factorName);
+      section.datasets.push(dataset);
+      if (dataset.productFamily) section.productFamilies.add(dataset.productFamily);
+      if (section.factorGroup === 'Unclassified' && dataset.factorGroup && dataset.factorGroup !== 'Unclassified') {
+        section.factorGroup = dataset.factorGroup;
       }
     });
 
     return Array.from(grouped.values())
       .sort((left, right) => left.factorName.localeCompare(right.factorName))
-      .map((row) => ({
-        ...row,
+      .map((section) => ({
+        ...section,
         summary: `Workbook-driven factor used in ${industry} lifecycle touchpoints.`,
-        productFamilies: Array.from(row.productFamilies).sort(),
-        cells: stages.reduce((accumulator, stageName) => {
-          const stageTouchpoints = row.datasets
-            .filter((dataset) => Boolean(getUsageForIndustryStage(dataset, industry, stageName)))
-            .map((dataset) => ({
-              dataset,
-              stageName,
-              role: getUsageForIndustryStage(dataset, industry, stageName),
-              roleLabel: roleShortLabel(getUsageForIndustryStage(dataset, industry, stageName)),
-              jurisdictions: inferJurisdictions(dataset),
-            }))
-            .filter((touchpoint) => {
-              if (!selectedJurisdictions.length) return true;
-              return touchpoint.jurisdictions.some((jurisdiction) => selectedJurisdictions.includes(jurisdiction));
-            })
-            .sort((left, right) => {
-              return (
-                rolePriorityValue(right.role) - rolePriorityValue(left.role) ||
-                left.dataset.commonName.localeCompare(right.dataset.commonName)
-              );
-            });
-
-          accumulator[stageName] = stageTouchpoints;
-          return accumulator;
-        }, {}),
+        productFamilies: Array.from(section.productFamilies).sort(),
+        rows: [...section.datasets]
+          .sort((left, right) => {
+            const pairCompare =
+              normalizePairingName(left.commonName).localeCompare(normalizePairingName(right.commonName)) ||
+              accessPriorityValue(left.openProprietary) - accessPriorityValue(right.openProprietary) ||
+              left.commonName.localeCompare(right.commonName) ||
+              left.productFamily.localeCompare(right.productFamily);
+            return pairCompare;
+          })
+          .map((dataset) => ({
+            dataset,
+            jurisdictions: inferJurisdictions(dataset),
+            cells: stages.reduce((accumulator, stageName) => {
+              const role = getUsageForIndustryStage(dataset, industry, stageName);
+              accumulator[stageName] = role
+                ? {
+                    dataset,
+                    stageName,
+                    role,
+                    roleLabel: roleShortLabel(role),
+                    jurisdictions: inferJurisdictions(dataset),
+                  }
+                : null;
+              return accumulator;
+            }, {}),
+          })),
       }));
-  }, [filteredDatasets, industry, selectedJurisdictions, stages]);
+  }, [filteredDatasets, industry, stages]);
 
   function toggleJurisdiction(nextValue) {
     setSelectedTouchpoint(null);
@@ -1367,7 +1382,7 @@ function TouchpointSalesWorkspace({ datasets }) {
               </p>
             </div>
             <div className="rounded-full bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-600">
-              {factorRows.length} factors in current view
+              {factorSections.length} factors in current view
             </div>
           </div>
           <div className="mt-5 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
@@ -1392,13 +1407,19 @@ function TouchpointSalesWorkspace({ datasets }) {
         </div>
 
         <div className="max-h-[72vh] overflow-auto">
-          <table className="min-w-[1880px] w-full table-fixed border-collapse text-sm">
+          <table className="min-w-[2120px] w-full table-fixed border-collapse text-sm">
             <thead className="sticky top-0 z-20">
               <tr className="border-b border-slate-300 bg-slate-100 shadow-[inset_0_-1px_0_rgba(203,213,225,0.9)]">
                 <th className="sticky left-0 z-30 w-72 border-r border-slate-300 bg-slate-200/95 px-5 py-4 text-left align-top">
                   <div className="text-[11px] font-black uppercase tracking-[0.18em] text-brand-blue">Factors</div>
                   <div className="mt-2 text-sm font-semibold text-slate-600">
                     Workbook-driven factor, factor group, and product family tags
+                  </div>
+                </th>
+                <th className="sticky left-72 z-30 w-72 border-r border-slate-300 bg-slate-100/95 px-5 py-4 text-left align-top">
+                  <div className="text-[11px] font-black uppercase tracking-[0.18em] text-brand-blue">Common name</div>
+                  <div className="mt-2 text-sm font-semibold text-slate-600">
+                    One data row follows one named dataset through the lifecycle
                   </div>
                 </th>
                 {stages.map((stageName, index) => (
@@ -1416,77 +1437,94 @@ function TouchpointSalesWorkspace({ datasets }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {factorRows.map((row) => (
-                <tr key={row.factorName}>
-                  <td className="sticky left-0 z-10 w-72 border-r border-slate-200 bg-white px-5 py-5 align-top">
-                    <div className="text-xl font-black tracking-tight text-brand-navy">{row.factorName}</div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <span
-                        className={`inline-flex rounded-full border px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] ${
-                          row.factorGroup === 'Analytical'
-                            ? 'border-green-200 bg-green-50 text-green-700'
-                            : row.factorGroup === 'Reference'
-                              ? 'border-sky-200 bg-sky-50 text-brand-blue'
-                              : 'border-slate-200 bg-slate-50 text-slate-500'
-                        }`}
-                      >
-                        {row.factorGroup}
-                      </span>
-                      {row.productFamilies.map((family) => (
-                        <span
-                          key={`${row.factorName}-${family}`}
-                          className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] text-slate-600"
-                        >
-                          {family}
-                        </span>
-                      ))}
-                    </div>
-                    <p className="mt-3 text-sm leading-7 text-slate-500">{row.summary}</p>
-                  </td>
-                  {stages.map((stageName) => {
-                    const touchpoints = row.cells[stageName] || [];
-                    return (
+              {factorSections.map((section) =>
+                section.rows.map((row, rowIndex) => (
+                  <tr key={`${section.factorName}-${row.dataset.id}`}>
+                    {rowIndex === 0 ? (
                       <td
-                        key={stageName}
-                        className={`px-3 py-4 align-top ${activeStage === stageName ? 'bg-sky-50/70' : 'bg-white'}`}
+                        rowSpan={section.rows.length}
+                        className="sticky left-0 z-10 w-72 border-r border-slate-200 bg-white px-5 py-5 align-top"
                       >
-                        {touchpoints.length === 0 ? (
-                          <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
-                            No mapped data
-                          </div>
-                        ) : (
-                          <div className="space-y-3">
-                            {touchpoints.map((touchpoint) => (
-                              <button
-                                key={`${row.factorName}-${stageName}-${touchpoint.dataset.id}`}
-                                type="button"
-                                onClick={() => openTouchpoint(touchpoint, row.factorName)}
-                                className={`w-full rounded-3xl border p-4 text-left transition ${
-                                  selectedTouchpoint?.dataset.id === touchpoint.dataset.id &&
-                                  selectedTouchpoint?.stageName === touchpoint.stageName
-                                    ? 'border-brand-blue bg-sky-50'
-                                    : 'border-slate-200 bg-white hover:border-brand-sky hover:bg-slate-50'
-                                }`}
-                              >
-                                <div className="text-base font-black leading-6 text-brand-navy">{touchpoint.dataset.commonName}</div>
-                                <div className="mt-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-                                  {touchpoint.roleLabel} | {touchpoint.jurisdictions.join(', ')}
-                                </div>
-                                <div className="mt-3 text-sm leading-6 text-slate-500">{touchpoint.dataset.description}</div>
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                  <RoleBadge role={touchpoint.role} />
-                                  <AccessBadge access={touchpoint.dataset.openProprietary} />
-                                  <StatusBadge status={touchpoint.dataset.status} />
-                                </div>
-                              </button>
-                            ))}
-                          </div>
-                        )}
+                        <div className="text-xl font-black tracking-tight text-brand-navy">{section.factorName}</div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <span
+                            className={`inline-flex rounded-full border px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] ${
+                              section.factorGroup === 'Analytical'
+                                ? 'border-green-200 bg-green-50 text-green-700'
+                                : section.factorGroup === 'Reference'
+                                  ? 'border-sky-200 bg-sky-50 text-brand-blue'
+                                  : 'border-slate-200 bg-slate-50 text-slate-500'
+                            }`}
+                          >
+                            {section.factorGroup}
+                          </span>
+                          {section.productFamilies.map((family) => (
+                            <span
+                              key={`${section.factorName}-${family}`}
+                              className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] text-slate-600"
+                            >
+                              {family}
+                            </span>
+                          ))}
+                        </div>
+                        <p className="mt-3 text-sm leading-7 text-slate-500">{section.summary}</p>
                       </td>
-                    );
-                  })}
-                </tr>
-              ))}
+                    ) : null}
+                    <td className="sticky left-72 z-10 w-72 border-r border-slate-200 bg-white px-5 py-5 align-top">
+                      <div className="text-lg font-black tracking-tight text-brand-navy">{row.dataset.commonName}</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <AccessBadge access={row.dataset.openProprietary} />
+                        <StatusBadge status={row.dataset.status} />
+                      </div>
+                      <div className="mt-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                        {row.jurisdictions.join(', ')}
+                      </div>
+                      <p className="mt-3 text-sm leading-6 text-slate-500">{row.dataset.description}</p>
+                    </td>
+                    {stages.map((stageName) => {
+                      const touchpoint = row.cells[stageName];
+                      const jurisdictionMatch =
+                        !selectedJurisdictions.length ||
+                        row.jurisdictions.some((jurisdiction) => selectedJurisdictions.includes(jurisdiction));
+
+                      return (
+                        <td
+                          key={stageName}
+                          className={`px-3 py-4 align-top ${activeStage === stageName ? 'bg-sky-50/70' : 'bg-white'}`}
+                        >
+                          {!jurisdictionMatch ? (
+                            <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                              Outside selected jurisdiction
+                            </div>
+                          ) : !touchpoint ? (
+                            <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                              Not used at this stage
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openTouchpoint(touchpoint, section.factorName)}
+                              className={`w-full rounded-3xl border p-4 text-left transition ${
+                                selectedTouchpoint?.dataset.id === touchpoint.dataset.id &&
+                                selectedTouchpoint?.stageName === touchpoint.stageName
+                                  ? 'border-brand-blue bg-sky-50'
+                                  : 'border-slate-200 bg-white hover:border-brand-sky hover:bg-slate-50'
+                              }`}
+                            >
+                              <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                                {touchpoint.roleLabel} | {touchpoint.jurisdictions.join(', ')}
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <RoleBadge role={touchpoint.role} />
+                              </div>
+                            </button>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                )),
+              )}
             </tbody>
           </table>
         </div>
